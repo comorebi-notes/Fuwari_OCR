@@ -1,18 +1,37 @@
-//
-//  Fuwari_HelperApp.swift
-//  Fuwari Helper
-//
-//  Created by luca on 11/13/25.
-//  Copyright © 2025 AppKnop. All rights reserved.
-//
+import AppKit
 
-import SwiftUI
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+        let mainBundleIdentifier = bundleIdentifier.replacingOccurrences(
+            of: #"-LaunchAtLoginHelper$"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: mainBundleIdentifier).isEmpty else {
+            NSApp.terminate(nil)
+            return
+        }
+
+        let pathComponents = (Bundle.main.bundlePath as NSString).pathComponents
+        let mainPath = NSString.path(withComponents: Array(pathComponents[0...(pathComponents.count - 5)]))
+        NSWorkspace.shared.openApplication(
+            at: URL(fileURLWithPath: mainPath),
+            configuration: NSWorkspace.OpenConfiguration()
+        ) { _, _ in
+            NSApp.terminate(nil)
+        }
+    }
+}
 
 @main
-struct Fuwari_HelperApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
+enum FuwariHelperMain {
+    private static let delegate = AppDelegate()
+
+    static func main() {
+        let app = NSApplication.shared
+        app.delegate = delegate
+        app.run()
     }
 }

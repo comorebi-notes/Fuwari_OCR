@@ -35,8 +35,12 @@ class FloatWindow: NSWindow, NSWindowDelegate {
     private var flagsMonitor: Any?
     private var isFreeResize = false
     private var isLiveResizing = false
+    private var isManualResizing = false
+    private var isManualMoving = false
     private var resizeEdges: ResizeEdges = []
     private var resizeAnchorFrame = NSRect.zero
+    private var dragAnchorFrame = NSRect.zero
+    private var dragAnchorMouseLocation = NSPoint.zero
     private let resizeEdgeInset = CGFloat(6.0)
     
     private var closeButton: NSButton!
@@ -90,12 +94,13 @@ class FloatWindow: NSWindow, NSWindowDelegate {
     
     init(contentRect: NSRect, styleMask style: NSWindow.StyleMask = [.borderless, .resizable], backing bufferingType: NSWindow.BackingStoreType = .buffered, defer flag: Bool = false, image: CGImage, spaceMode: SpaceMode) {
         super.init(contentRect: contentRect, styleMask: style, backing: bufferingType, defer: flag)
+        styleMask.remove(.resizable)
         contentView = FloatView(frame: contentRect)
         originalRect = contentRect
         self.spaceMode = spaceMode
         collectionBehavior = spaceMode.getCollectionBehavior()
         level = .floating
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false
         hasShadow = true
         contentView?.wantsLayer = true
         contentView?.layer?.contents = image
@@ -192,6 +197,9 @@ class FloatWindow: NSWindow, NSWindowDelegate {
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        if isManualResizing {
+            return frameSize
+        }
         let shiftDown = isFreeResize
             || NSEvent.modifierFlags.contains(.shift)
             || (NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false)
@@ -216,6 +224,16 @@ class FloatWindow: NSWindow, NSWindowDelegate {
         closeButton.frame = NSRect(x: 4, y: frame.height - 20, width: 16, height: 16)
         spaceButton.frame = NSRect(x: frame.width - 20, y: frame.height - 20, width: 16, height: 16)
         showPopUp(text: "\(Int(windowScale * 100))%")
+    }
+
+    private func isInResizeZone(_ mouseLocation: NSPoint, in frame: NSRect) -> Bool {
+        let leftDistance = abs(mouseLocation.x - frame.minX)
+        let rightDistance = abs(mouseLocation.x - frame.maxX)
+        let bottomDistance = abs(mouseLocation.y - frame.minY)
+        let topDistance = abs(mouseLocation.y - frame.maxY)
+        let horizontalDistance = min(leftDistance, rightDistance)
+        let verticalDistance = min(bottomDistance, topDistance)
+        return min(horizontalDistance, verticalDistance) <= resizeEdgeInset
     }
 
     private func resizeEdges(for mouseLocation: NSPoint, in frame: NSRect) -> ResizeEdges {
@@ -260,6 +278,45 @@ class FloatWindow: NSWindow, NSWindowDelegate {
         if height < minSize.height { height = minSize.height }
 
         return NSSize(width: width, height: height)
+    }
+
+    private func aspectResizeSize(for mouseLocation: NSPoint, aspectRatio: CGFloat) -> NSSize {
+        let frame = resizeAnchorFrame
+        var width = frame.width
+        var height = frame.height
+
+        if resizeEdges.contains(.left) {
+            width = frame.maxX - mouseLocation.x
+        } else if resizeEdges.contains(.right) {
+            width = mouseLocation.x - frame.minX
+        }
+        if resizeEdges.contains(.bottom) {
+            height = frame.maxY - mouseLocation.y
+        } else if resizeEdges.contains(.top) {
+            height = mouseLocation.y - frame.minY
+        }
+
+        width = max(width, 0.0)
+        height = max(height, 0.0)
+
+        let widthDelta = abs(width - frame.width)
+        let heightDelta = abs(height - frame.height)
+        if heightDelta > widthDelta {
+            return aspectSize(fromHeight: height, aspectRatio: aspectRatio, minSize: minSize)
+        }
+        return aspectSize(fromWidth: width, aspectRatio: aspectRatio, minSize: minSize)
+    }
+
+    private func aspectSize(fromWidth width: CGFloat, aspectRatio: CGFloat, minSize: NSSize) -> NSSize {
+        let minWidth = max(minSize.width, minSize.height * aspectRatio)
+        let clampedWidth = max(width, minWidth)
+        return NSSize(width: clampedWidth, height: clampedWidth / aspectRatio)
+    }
+
+    private func aspectSize(fromHeight height: CGFloat, aspectRatio: CGFloat, minSize: NSSize) -> NSSize {
+        let minHeight = max(minSize.height, minSize.width / aspectRatio)
+        let clampedHeight = max(height, minHeight)
+        return NSSize(width: clampedHeight * aspectRatio, height: clampedHeight)
     }
     
     override func keyDown(with event: NSEvent) {
@@ -362,18 +419,87 @@ class FloatWindow: NSWindow, NSWindowDelegate {
     }
   
     override func mouseDown(with event: NSEvent) {
+        if let contentView = contentView {
+            let locationInView = contentView.convert(event.locationInWindow, from: nil)
+            if let hitView = contentView.hitTest(locationInView), hitView is NSControl {
+                super.mouseDown(with: event)
+                return
+            }
+        }
         let movingOpacity = defaults.float(forKey: Constants.UserDefaults.movingOpacity)
         if movingOpacity < 1 {
             alphaValue = CGFloat(movingOpacity)
         }
         closeButton.alphaValue = 0.0
         spaceButton.alphaValue = 0.0
+
+        let mouseLocation = NSEvent.mouseLocation
+        if isInResizeZone(mouseLocation, in: frame) {
+            isManualMoving = false
+            isManualResizing = true
+            isLiveResizing = true
+            isFreeResize = event.modifierFlags.contains(.shift)
+            resizeAnchorFrame = frame
+            resizeEdges = resizeEdges(for: mouseLocation, in: resizeAnchorFrame)
+            return
+        }
+
+        isManualResizing = false
+        isManualMoving = true
+        dragAnchorFrame = frame
+        dragAnchorMouseLocation = mouseLocation
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if isManualResizing {
+            let mouseLocation = NSEvent.mouseLocation
+            let hasOriginalRect = originalRect.width > 0 && originalRect.height > 0
+            let aspectRatio = hasOriginalRect ? (originalRect.width / originalRect.height) : 1.0
+            let shiftDown = isFreeResize || event.modifierFlags.contains(.shift)
+            let newSize = shiftDown
+                ? freeResizeSize(for: mouseLocation)
+                : aspectResizeSize(for: mouseLocation, aspectRatio: aspectRatio)
+            var newFrame = resizeAnchorFrame
+            if resizeEdges.contains(.left) {
+                newFrame.origin.x = resizeAnchorFrame.maxX - newSize.width
+            } else if resizeEdges.contains(.right) {
+                newFrame.origin.x = resizeAnchorFrame.minX
+            }
+            if resizeEdges.contains(.bottom) {
+                newFrame.origin.y = resizeAnchorFrame.maxY - newSize.height
+            } else if resizeEdges.contains(.top) {
+                newFrame.origin.y = resizeAnchorFrame.minY
+            }
+            newFrame.size = newSize
+            setFrame(newFrame, display: true)
+            return
+        }
+
+        if isManualMoving {
+            let mouseLocation = NSEvent.mouseLocation
+            let dx = mouseLocation.x - dragAnchorMouseLocation.x
+            let dy = mouseLocation.y - dragAnchorMouseLocation.y
+            let newOrigin = NSPoint(x: dragAnchorFrame.origin.x + dx, y: dragAnchorFrame.origin.y + dy)
+            setFrame(NSRect(origin: newOrigin, size: dragAnchorFrame.size), display: true)
+        }
     }
     
     override func mouseUp(with event: NSEvent) {
         alphaValue = windowOpacity
         closeButton.alphaValue = buttonOpacity
         spaceButton.alphaValue = buttonOpacity
+        if isManualResizing {
+            isManualResizing = false
+            isLiveResizing = false
+            isFreeResize = false
+            resizeEdges = []
+            resizeAnchorFrame = .zero
+        }
+        if isManualMoving {
+            isManualMoving = false
+            dragAnchorFrame = .zero
+            dragAnchorMouseLocation = .zero
+        }
         // Double click to close
         if event.clickCount >= 2 {
             closeWindow()
