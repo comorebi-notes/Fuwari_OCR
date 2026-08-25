@@ -7,10 +7,13 @@
 //
 
 import Cocoa
+import Darwin
 
 class ScreenshotManager: NSObject {
 
     static let shared = ScreenshotManager()
+
+    private let captureRectAttribute = "com.apple.metadata:kMDItemScreenCaptureGlobalRect"
     
     private let defaults = UserDefaults.standard
     
@@ -36,7 +39,7 @@ class ScreenshotManager: NSObject {
             guard task.terminationStatus == 0 else { return }
             let output = pipe.fileHandleForReading.availableData
             let str = String(decoding: output, as: UTF8.self)
-            let rect = self.extractCoordinates(str: str)
+            let rect = self.extractCoordinates(from: fileUrl) ?? self.extractCoordinates(str: str)
             DispatchQueue.main.async { [weak self] in
                 guard let tapCount = self?.tapCount else { return }
                 if (tapCount == 1) {
@@ -50,6 +53,37 @@ class ScreenshotManager: NSObject {
             }
         }
         captureProcess.launch()
+    }
+
+    func extractCoordinates(from fileUrl: URL) -> NSRect? {
+        let data = fileUrl.path.withCString { filePath in
+            captureRectAttribute.withCString { attributeName -> Data? in
+                let size = getxattr(filePath, attributeName, nil, 0, 0, 0)
+                guard size > 0 else { return nil }
+
+                var data = Data(count: size)
+                let bytesRead = data.withUnsafeMutableBytes { buffer in
+                    getxattr(filePath, attributeName, buffer.baseAddress, buffer.count, 0, 0)
+                }
+                guard bytesRead == size else { return nil }
+                return data
+            }
+        }
+
+        guard
+            let data = data,
+            let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [NSNumber],
+            values.count == 4
+        else {
+            return nil
+        }
+
+        return NSRect(
+            x: values[0].doubleValue,
+            y: values[1].doubleValue,
+            width: values[2].doubleValue,
+            height: values[3].doubleValue
+        )
     }
 
     func extractCoordinates(str: String) -> NSRect? {

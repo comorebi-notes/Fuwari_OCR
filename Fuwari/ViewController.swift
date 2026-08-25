@@ -53,35 +53,40 @@ class ViewController: NSViewController, NSWindowDelegate {
 
   private func setDefaultScreenshotHandler() {
     ScreenshotManager.shared.eventHandler { imageUrl, rectMaybeConst, spaceMode in
-      let mainScreen = NSScreen.screens.first
-      let currentScreen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-      guard let currentScaleFactor = currentScreen?.backingScaleFactor else { return }
-      let mouseLocation = NSEvent.mouseLocation
       guard let ciImage = CIImage(contentsOf: imageUrl)?.copy() as? CIImage else { return }
 
       let context = CIContext(options: nil)
 
       guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
-      var rectMaybe = rectMaybeConst
-      if let height = mainScreen?.frame.size.height, let rect = rectMaybe {
-        rectMaybe = NSRect(
-          x: rect.minX,
-          y: height - rect.maxY,
-          width: rect.width,
-          height: rect.height
-        )
-      }
-      let rect =
-        rectMaybe
-        ?? NSRect(
-          x: Int(mouseLocation.x) - cgImage.width / Int(2 * currentScaleFactor),
-          y: Int(mouseLocation.y) - cgImage.height / Int(2 * currentScaleFactor),
-          width: Int(CGFloat(cgImage.width) / currentScaleFactor),
-          height: Int(CGFloat(cgImage.height) / currentScaleFactor)
-        )
+      let rect = self.windowRect(for: rectMaybeConst, image: cgImage)
       self.createFloatWindow(rect: rect, image: cgImage, spaceMode: spaceMode)
       try? FileManager.default.removeItem(at: imageUrl)
     }
+  }
+
+  private func windowRect(for captureRect: NSRect?, image: CGImage) -> NSRect {
+    if
+      let captureRect = captureRect,
+      let primaryScreen = NSScreen.screens.first(where: { $0.frame.origin == .zero })
+        ?? NSScreen.screens.first
+    {
+      return NSRect(
+        x: captureRect.minX,
+        y: primaryScreen.frame.maxY - captureRect.maxY,
+        width: captureRect.width,
+        height: captureRect.height
+      )
+    }
+
+    let mouseLocation = NSEvent.mouseLocation
+    let currentScreen = NSScreen.screens.first { $0.frame.contains(mouseLocation) }
+    let scaleFactor = currentScreen?.backingScaleFactor ?? 1
+    return NSRect(
+      x: Int(mouseLocation.x) - image.width / Int(2 * scaleFactor),
+      y: Int(mouseLocation.y) - image.height / Int(2 * scaleFactor),
+      width: Int(CGFloat(image.width) / scaleFactor),
+      height: Int(CGFloat(image.height) / scaleFactor)
+    )
   }
 
   @objc private func startOcrCapture() {
