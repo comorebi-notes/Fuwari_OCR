@@ -1,3 +1,7 @@
+## このリポジトリは？
+[Fuwari](https://github.com/kentya6/Fuwari) の OCR 機能追加バージョン [Fuwari_OCR](https://github.com/qlife1146/Fuwari_OCR) をフォークして、さらに [バグ修正](https://github.com/comorebi-notes/Fuwari_OCR/commit/20ca5cb1f46229c023517a051c696adc469997fa)（複数画面があって解像度が異なる場合に、キャプチャ後の位置がズレる場合がある問題）を含めたフォークです。
+
+## Introduction
 <div align="center">
   <img src="https://user-images.githubusercontent.com/16918590/111069765-ee119500-8511-11eb-83c2-a45bf2aa40da.png" width="196px" />
   <h1>Fuwari</h1>
